@@ -5,7 +5,17 @@ package(default_visibility = ["//visibility:private"])
 
 licenses(["notice"])  # Apache 2.0
 
-load("build_defs", "JAVACOPTS")
+load(":build_defs.bzl", "JAVACOPTS")
+load(":src/gen/gen_ops.bzl", "tf_java_op_gen_srcjar")
+load(
+    "//tensorflow:tensorflow.bzl",
+    "tf_binary_additional_srcs",
+    "tf_cc_binary",
+    "tf_copts",
+    "tf_custom_op_library",
+    "tf_java_test",
+    "tf_cc_test",
+)
 
 java_library(
     name = "tensorflow",
@@ -15,6 +25,7 @@ java_library(
     ],
     data = [":libtensorflow_jni"],
     javacopts = JAVACOPTS,
+    plugins = [":processor"],
     visibility = ["//visibility:public"],
 )
 
@@ -22,18 +33,84 @@ java_library(
 # .aar. At some point, might make sense for a .aar rule here instead.
 filegroup(
     name = "java_sources",
-    srcs = glob(["src/main/java/org/tensorflow/*.java"]),
+    srcs = glob([
+        "src/main/java/org/tensorflow/*.java",
+        "src/main/java/org/tensorflow/types/*.java",
+    ]),
     visibility = [
         "//tensorflow/contrib/android:__pkg__",
         "//tensorflow/java:__pkg__",
     ],
 )
 
+java_plugin(
+    name = "processor",
+    generates_api = True,
+    processor_class = "org.tensorflow.processor.OperatorProcessor",
+    visibility = ["//visibility:public"],
+    deps = [":processor_library"],
+)
+
+java_library(
+    name = "processor_library",
+    srcs = glob(["src/gen/java/org/tensorflow/processor/**/*.java"]),
+    javacopts = JAVACOPTS,
+    resources = glob(["src/gen/resources/META-INF/services/javax.annotation.processing.Processor"]),
+)
+
 filegroup(
     name = "java_op_sources",
-    srcs = glob(["src/main/java/org/tensorflow/op/*.java"]),
+    srcs = glob(["src/main/java/org/tensorflow/op/**/*.java"]) + [
+        ":java_op_gen_sources",
+    ],
     visibility = [
         "//tensorflow/java:__pkg__",
+    ],
+)
+
+tf_java_op_gen_srcjar(
+    name = "java_op_gen_sources",
+    api_def_srcs = [
+        "//tensorflow/core/api_def:base_api_def",
+    ],
+    base_package = "org.tensorflow.op",
+    gen_tool = ":java_op_gen_tool",
+)
+
+tf_cc_binary(
+    name = "java_op_gen_tool",
+    srcs = [
+        "src/gen/cc/op_gen_main.cc",
+    ],
+    copts = tf_copts(),
+    linkopts = ["-lm"],
+    linkstatic = 1,
+    deps = [
+        ":java_op_gen_lib",
+        "//tensorflow/core:ops",
+    ],
+)
+
+cc_library(
+    name = "java_op_gen_lib",
+    srcs = [
+        "src/gen/cc/op_generator.cc",
+        "src/gen/cc/op_specs.cc",
+        "src/gen/cc/source_writer.cc",
+    ],
+    hdrs = [
+        "src/gen/cc/java_defs.h",
+        "src/gen/cc/op_generator.h",
+        "src/gen/cc/op_specs.h",
+        "src/gen/cc/source_writer.h",
+    ],
+    copts = tf_copts(),
+    deps = [
+        "//tensorflow/core:framework",
+        "//tensorflow/core:framework_internal",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:lib_internal",
+        "//tensorflow/core:op_gen_lib",
     ],
 )
 
@@ -45,7 +122,7 @@ java_library(
     deps = [":tensorflow"],
 )
 
-java_test(
+tf_java_test(
     name = "GraphTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/GraphTest.java"],
@@ -58,7 +135,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "OperationBuilderTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/OperationBuilderTest.java"],
@@ -71,7 +148,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "OperationTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/OperationTest.java"],
@@ -84,7 +161,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "SavedModelBundleTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/SavedModelBundleTest.java"],
@@ -98,7 +175,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "SessionTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/SessionTest.java"],
@@ -111,7 +188,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "ShapeTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/ShapeTest.java"],
@@ -124,10 +201,16 @@ java_test(
     ],
 )
 
-java_test(
+tf_custom_op_library(
+    name = "my_test_op.so",
+    srcs = ["src/test/native/my_test_op.cc"],
+)
+
+tf_java_test(
     name = "TensorFlowTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/TensorFlowTest.java"],
+    data = [":my_test_op.so"],
     javacopts = JAVACOPTS,
     test_class = "org.tensorflow.TensorFlowTest",
     deps = [
@@ -136,7 +219,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "TensorTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/TensorTest.java"],
@@ -149,7 +232,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "ScopeTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/op/ScopeTest.java"],
@@ -162,7 +245,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "PrimitiveOpTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/op/PrimitiveOpTest.java"],
@@ -175,7 +258,7 @@ java_test(
     ],
 )
 
-java_test(
+tf_java_test(
     name = "OperandsTest",
     size = "small",
     srcs = ["src/test/java/org/tensorflow/op/OperandsTest.java"],
@@ -185,6 +268,43 @@ java_test(
         ":tensorflow",
         ":testutil",
         "@junit",
+    ],
+)
+
+tf_java_test(
+    name = "ConstantTest",
+    size = "small",
+    srcs = ["src/test/java/org/tensorflow/op/core/ConstantTest.java"],
+    javacopts = JAVACOPTS,
+    test_class = "org.tensorflow.op.core.ConstantTest",
+    deps = [
+        ":tensorflow",
+        ":testutil",
+        "@junit",
+    ],
+)
+
+filegroup(
+    name = "processor_test_resources",
+    srcs = glob([
+        "src/test/resources/org/tensorflow/**/*.java",
+        "src/main/java/org/tensorflow/op/annotation/Operator.java",
+    ]),
+)
+
+tf_cc_test(
+    name = "source_writer_test",
+    size = "small",
+    srcs = [
+        "src/gen/cc/source_writer_test.cc",
+    ],
+    data = [
+        "src/gen/resources/test.java.snippet",
+    ],
+    deps = [
+        ":java_op_gen_lib",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
     ],
 )
 
@@ -201,7 +321,7 @@ LINKER_VERSION_SCRIPT = ":config/version_script.lds"
 
 LINKER_EXPORTED_SYMBOLS = ":config/exported_symbols.lds"
 
-cc_binary(
+tf_cc_binary(
     name = "libtensorflow_jni.so",
     # Set linker options to strip out anything except the JNI
     # symbols from the library. This reduces the size of the library
@@ -235,10 +355,10 @@ genrule(
     outs = ["pom.xml"],
     cmd = "$(location generate_pom) >$@",
     output_to_bindir = 1,
-    tools = [":generate_pom"],
+    tools = [":generate_pom"] + tf_binary_additional_srcs(),
 )
 
-cc_binary(
+tf_cc_binary(
     name = "generate_pom",
     srcs = ["generate_pom.cc"],
     deps = ["//tensorflow/c:c_api"],
@@ -253,16 +373,4 @@ genrule(
     outs = ["libtensorflow_jni.dylib"],
     cmd = "cp $< $@",
     output_to_bindir = 1,
-)
-
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
 )

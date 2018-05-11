@@ -43,13 +43,13 @@ def _infer_frame_shape(signal, frame_length, frame_step, pad_end, axis):
   outer_dimensions = signal_shape[:axis]
   inner_dimensions = signal_shape[axis:][1:]
   if signal_shape and frame_axis is not None:
-    if frame_step and frame_length is not None:
-      if pad_end:
-        # Double negative is so that we round up.
-        num_frames = -(-frame_axis // frame_step)
-      else:
-        num_frames = (frame_axis - frame_length + frame_step) // frame_step
-      num_frames = max(0, num_frames)
+    if frame_step is not None and pad_end:
+      # Double negative is so that we round up.
+      num_frames = max(0, -(-frame_axis // frame_step))
+    elif frame_step is not None and frame_length is not None:
+      assert not pad_end
+      num_frames = max(
+          0, (frame_axis - frame_length + frame_step) // frame_step)
   return outer_dimensions + [num_frames, frame_length] + inner_dimensions
 
 
@@ -57,7 +57,7 @@ def frame(signal, frame_length, frame_step, pad_end=False, pad_value=0, axis=-1,
           name=None):
   """Expands `signal`'s `axis` dimension into frames of `frame_length`.
 
-  Slides a window of size `frame_length` over `signal`s `axis` dimension
+  Slides a window of size `frame_length` over `signal`'s `axis` dimension
   with a stride of `frame_step`, replacing the `axis` dimension with
   `[frames, frame_length]` frames.
 
@@ -91,7 +91,8 @@ def frame(signal, frame_length, frame_step, pad_end=False, pad_value=0, axis=-1,
     A `Tensor` of frames with shape `[..., frames, frame_length, ...]`.
 
   Raises:
-    ValueError: If `frame_length`, `frame_step`, or `pad_value` are not scalar.
+    ValueError: If `frame_length`, `frame_step`, `pad_value`, or `axis` are not
+      scalar.
   """
   with ops.name_scope(name, "frame", [signal, frame_length, frame_step,
                                       pad_value]):

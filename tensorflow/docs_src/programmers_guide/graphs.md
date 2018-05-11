@@ -44,8 +44,31 @@ programs:
 
 * **Portability.** The dataflow graph is a language-independent representation
   of the code in your model. You can build a dataflow graph in Python, store it
-  in a [SavedModel](TODO), and restore it in a C++ program for low-latency
-  inference.
+  in a @{$saved_model$SavedModel}, and restore it in a C++ program for
+  low-latency inference.
+
+
+## What is a @{tf.Graph}?
+
+A @{tf.Graph} contains two relevant kinds of information:
+
+* **Graph structure.** The nodes and edges of the graph, indicating how
+  individual operations are composed together, but not prescribing how they
+  should be used. The graph structure is like assembly code: inspecting it can
+  convey some useful information, but it does not contain all of the useful
+  context that source code conveys.
+
+* **Graph collections.** TensorFlow provides a general mechanism for storing
+  collections of metadata in a @{tf.Graph}. The @{tf.add_to_collection} function
+  enables you to associate a list of objects with a key (where @{tf.GraphKeys}
+  defines some of the standard keys), and @{tf.get_collection} enables you to
+  look up all objects associated with a key. Many parts of the TensorFlow
+  library use this facility: for example, when you create a @{tf.Variable}, it
+  is added by default to collections representing "global variables" and
+  "trainable variables". When you later come to create a @{tf.train.Saver} or
+  @{tf.train.Optimizer}, the variables in these collections are used as the
+  default arguments.
+
 
 ## Building a @{tf.Graph}
 
@@ -66,18 +89,18 @@ to all API functions in the same context.  For example:
 * Executing `v = tf.Variable(0)` adds to the graph a @{tf.Operation} that will
   store a writeable tensor value that persists between @{tf.Session.run} calls.
   The @{tf.Variable} object wraps this operation, and can be used [like a
-  tensor](#tensor-like-objects), which will read the current value of the
+  tensor](#tensor-like_objects), which will read the current value of the
   stored value. The @{tf.Variable} object also has methods such as
   @{tf.Variable.assign$`assign`} and @{tf.Variable.assign_add$`assign_add`} that
   create @{tf.Operation} objects that, when executed, update the stored value.
   (See @{$programmers_guide/variables} for more information about variables.)
 
 * Calling @{tf.train.Optimizer.minimize} will add operations and tensors to the
-  default graph that calculate gradients, and return a @{tf.Operation} that,
+  default graph that calculates gradients, and return a @{tf.Operation} that,
   when run, will apply those gradients to a set of variables.
 
 Most programs rely solely on the default graph. However,
-see [Dealing with multiple graphs](#dealing-with-multiple-graphs) for more
+see [Dealing with multiple graphs](#programming_with_multiple_graphs) for more
 advanced use cases. High-level APIs such as the @{tf.estimator.Estimator} API
 manage the default graph on your behalf, and--for example--may create different
 graphs for training and evaluation.
@@ -102,14 +125,14 @@ an operation:
   @{tf.Tensor} accepts an optional `name` argument. For example,
   `tf.constant(42.0, name="answer")` creates a new @{tf.Operation} named
   `"answer"` and returns a @{tf.Tensor} named `"answer:0"`. If the default graph
-  already contained an operation named `"answer"`, the TensorFlow would append
+  already contains an operation named `"answer"`, then TensorFlow would append
   `"_1"`, `"_2"`, and so on to the name, in order to make it unique.
 
 * The @{tf.name_scope} function makes it possible to add a **name scope** prefix
   to all operations created in a particular context. The current name scope
   prefix is a `"/"`-delimited list of the names of all active @{tf.name_scope}
   context managers. If a name scope has already been used in the current
-  context, TensorFlow appens `"_1"`, `"_2"`, and so on. For example: 
+  context, TensorFlow appends `"_1"`, `"_2"`, and so on. For example:
 
   ```python
   c_0 = tf.constant(0, name="c")  # => operation named "c"
@@ -187,9 +210,8 @@ with tf.device("/device:GPU:0"):
   # Operations created in this context will be pinned to the GPU.
   result = tf.matmul(weights, img)
 ```
-
-If you are deploying TensorFlow in a @{$deploy/distributed$typical distributed
-configuration}, you might specify the job name and task ID to place variables on
+If you are deploying TensorFlow in a @{$distributed$typical distributed configuration},
+you might specify the job name and task ID to place variables on
 a task in the parameter server job (`"/job:ps"`), and the other operations on
 task in the worker job (`"/job:worker"`):
 
@@ -296,7 +318,7 @@ described below.
 * **`target`.** If this argument is left empty (the default), the session will
   only use devices in the local machine. However, you may also specify a
   `grpc://` URL to specify the address of a TensorFlow server, which gives the
-  session access to all devices on machines that that server controls. See 
+  session access to all devices on machines that this server controls. See
   @{tf.train.Server} for details of how to create a TensorFlow
   server. For example, in the common **between-graph replication**
   configuration, the @{tf.Session} connects to a @{tf.train.Server} in the same
@@ -306,27 +328,27 @@ described below.
 * **`graph`.** By default, a new @{tf.Session} will be bound to---and only able
   to run operations in---the current default graph. If you are using multiple
   graphs in your program (see [Programming with multiple
-  graphs](programming-with-multiple-graphs) for more details), you can specify
+  graphs](#programming_with_multiple_graphs) for more details), you can specify
   an explicit @{tf.Graph} when you construct the session.
 
 * **`config`.** This argument allows you to specify a @{tf.ConfigProto} that
   controls the behavior of the session. For example, some of the configuration
   options include:
 
-  * `allow_soft_placement`. Set this to `True` to enable a "soft" device
+    * `allow_soft_placement`. Set this to `True` to enable a "soft" device
     placement algorithm, which ignores @{tf.device} annotations that attempt
     to place CPU-only operations on a GPU device, and places them on the CPU
     instead.
 
-  * `cluster_def`. When using distributed TensorFlow, this option allows you
+    * `cluster_def`. When using distributed TensorFlow, this option allows you
     to specify what machines to use in the computation, and provide a mapping
     between job names, task indices, and network addresses. See
     @{tf.train.ClusterSpec.as_cluster_def} for details.
 
-  * `graph_options.optimizer_options`. Provides control over the optimizations
+    * `graph_options.optimizer_options`. Provides control over the optimizations
     that TensorFlow performs on your graph before executing it.
 
-  * `gpu_options.allow_growth`. Set this to `True` to change the GPU memory
+    * `gpu_options.allow_growth`. Set this to `True` to change the GPU memory
     allocator so that it gradually increases the amount of memory allocated,
     rather than allocating most of the memory at startup.
 
@@ -340,7 +362,7 @@ operations that are needed to compute the result.
 
 @{tf.Session.run} requires you to specify a list of **fetches**, which determine
 the return values, and may be a @{tf.Operation}, a @{tf.Tensor}, or
-a [tensor-like type](#tensor-like-objects) such as @{tf.Variable}. These fetches
+a [tensor-like type](#tensor-like_objects) such as @{tf.Variable}. These fetches
 determine what **subgraph** of the overall @{tf.Graph} must be executed to
 produce the result: this is the subgraph that contains all operations named in
 the fetch list, plus all operations whose outputs are used to compute the value
@@ -381,8 +403,8 @@ y = tf.square(x)
 
 with tf.Session() as sess:
   # Feeding a value changes the result that is returned when you evaluate `y`.
-  print(sess.run(y, {x: [1.0, 2.0, 3.0]})  # => "[1.0, 4.0, 9.0]"
-  print(sess.run(y, {x: [0.0, 0.0, 5.0]})  # => "[0.0, 0.0, 25.0]"
+  print(sess.run(y, {x: [1.0, 2.0, 3.0]}))  # => "[1.0, 4.0, 9.0]"
+  print(sess.run(y, {x: [0.0, 0.0, 5.0]}))  # => "[0.0, 0.0, 25.0]"
 
   # Raises `tf.errors.InvalidArgumentError`, because you must feed a value for
   # a `tf.placeholder()` when evaluating a tensor that depends on it.
@@ -419,89 +441,6 @@ with tf.Session() as sess:
   print(metadata.step_stats)
 ```
 
-## `GraphDef` and `MetaGraphDef`
-
-TensorFlow uses a dataflow graph as a portable representation for your
-application. A @{tf.Graph} contains two relevant kinds of information:
-
-* **Graph structure.** The nodes and edges of the graph, indicating how
-  individual operations are composed together, but not prescribing how they
-  should be used. The graph structure is like assembly code: inspecting it can
-  convey some useful information, but it does not contain all of the useful
-  context that source code conveys.
-
-* **Graph collections.** TensorFlow provides a general mechanism for storing
-  collections of metadata in a @{tf.Graph}. The @{tf.add_to_collection} function
-  enables you to associate a list of objects with a key (where @{tf.GraphKeys}
-  defines some of the standard keys), and @{tf.get_collection} enables you to
-  look up all objects associated with a key. Many parts of the TensorFlow
-  library use this facility: for example, when you create a @{tf.Variable}, it
-  is added by default to collections representing "global variables" and
-  "trainable variables". When you later come to create a @{tf.train.Saver} or
-  @{tf.train.Optimizer}, the variables in these collections are used as the
-  default arguments.
-
-A @{tf.Graph} can be saved in two forms:
-
-* @{tf.GraphDef}: This is a low-level representation of the graph structure,
-  containing a description of all of its operations (as @{tf.NodeDef} protocol
-  buffers) and the edges between them. The @{tf.GraphDef} representation is
-  primarily used with low-level APIs, such as the `tensorflow::Session` C++
-  API, and it typically requires additional context (such as the names of
-  particular operations) to make use of it. The @{tf.Graph.as_graph_def} method
-  converts a @{tf.Graph} to a @{tf.GraphDef}.
-
-* `tf.train.MetaGraphDef`: This is a higher-level representation of a dataflow
-  graph, which includes a @{tf.GraphDef}, and information that helps to
-  understand the graph (such as the contents of the graph collections). The
-  @{tf.train.export_meta_graph} function converts a @{tf.Graph} to a
-  `tf.train.MetaGraphDef`. The @{tf.train.Saver.save} method also writes a
-  `tf.train.MetaGraphDef` that can be used in conjunction with the saved
-  checkpoint to restore the state of a training process at the point it was
-  saved.
-
-In most cases, we encourage you to use `tf.train.MetaGraphDef` instead of
-@{tf.GraphDef}. There are cases where a @{tf.GraphDef} can be useful---for
-example, when performing low-level graph modifications using functions like
-@{tf.import_graph_def} or
-the
-[Graph Transform](https://github.com/tensorflow/tensorflow/blob/master/tensorflow/tools/graph_transforms/README.md) tool---but
-`tf.train.MetaGraphDef` is a better building block for high-level applications.
-For example the [SavedModel library](TODO) uses `tf.train.MetaGraphDef` to
-package up a @{tf.Graph} and a set of trained model parameters so that it can be
-used for serving.
-
-If you have a `tf.train.MetaGraphDef`, the @{tf.train.import_meta_graph}
-function will load it into the default graph. Calling this function has two
-main features:
-
-1. It will restore the contents of the graph collections from the original
-   graph. APIs such as @{tf.global_variables} and the default arguments to
-   APIs like @{tf.train.Optimizer.minimize} will work the same way as they
-   did in the original graph.
-
-2. The function returns a @{tf.train.Saver}, which can be used to restore the
-   state (trained parameters, etc.) associated with the graph from a checkpoint.
-   The @{tf.train.latest_checkpoint} function can help to find the latest
-   checkpoint from a particular checkpoint directory.
-
-If you have a @{tf.GraphDef}, the @{tf.import_graph_def} function enables you
-to load the graph into an existing Python @{tf.Graph} object. To make use of the
-imported graph, you must know the names of operations or tensors in the
-@{tf.GraphDef}. The @{tf.import_graph_def} function has two main features to
-help you use the imported graph:
-
-1. You can **rebind** tensors in the imported graph to @{tf.Tensor} objects in
-   the default graph by passing the optional `input_map` argument. For example,
-   `input_map` enables you to take import a graph fragment defined in a
-   @{tf.GraphDef}, and statically connect tensors in the graph you are
-   building to @{tf.placeholder} tensors in that fragment.
-
-2. You can **return** @{tf.Tensor} or @{tf.Operation} objects from the imported
-   graph by passing their names in the `return_elements` list.
-
-In addition, you can use @{tf.device} and @{tf.name_scope} to control the
-device placement and name of the imported nodes.
 
 ## Visualizing your graph
 
@@ -547,7 +486,7 @@ subgraph inside.
 ![](../images/mnist_deep.png)
 
 For more information about visualizing your TensorFlow application with
-TensorBoard, see the [TensorBoard tutorial](TODO).
+TensorBoard, see the [TensorBoard tutorial](../get_started/summaries_and_tensorboard.md).
 
 ## Programming with multiple graphs
 
@@ -566,7 +505,7 @@ multiple graphs in the same process.
 As noted above, TensorFlow provides a "default graph" that is implicitly passed
 to all API functions in the same context. For many applications, a single graph
 is sufficient. However, TensorFlow also provides methods for manipulating
-the default graph, which can be useful in more advanced used cases. For example:
+the default graph, which can be useful in more advanced use cases. For example:
 
 * A @{tf.Graph} defines the namespace for @{tf.Operation} objects: each
   operation in a single graph must have a unique name. TensorFlow will
@@ -577,7 +516,7 @@ the default graph, which can be useful in more advanced used cases. For example:
 
 * The default graph stores information about every @{tf.Operation} and
   @{tf.Tensor} that was ever added to it. If your program creates a large number
-  of unconnected subgraphs, it may be more efficient to use a different 
+  of unconnected subgraphs, it may be more efficient to use a different
   @{tf.Graph} to build each subgraph, so that unrelated state can be garbage
   collected.
 

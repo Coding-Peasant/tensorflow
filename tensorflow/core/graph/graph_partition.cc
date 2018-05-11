@@ -35,6 +35,7 @@ limitations under the License.
 #include "tensorflow/core/graph/tensor_id.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/hash/hash.h"
+#include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/device_name_utils.h"
 
@@ -117,14 +118,14 @@ DataType EdgeType(const Edge* e) {
   }
 }
 
-// Return true iff we need to add a same device send/recv for 'edge'.
+// Return true iff we need to add the same device send/recv for 'edge'.
 bool NeedSameDeviceSendRecv(const Edge* edge, const GraphInfo& info) {
   if (edge->IsControlEdge()) {
     return false;
   }
 
-  Node* src = edge->src();
-  Node* dst = edge->dst();
+  const Node* src = edge->src();
+  const Node* dst = edge->dst();
   if (src->assigned_device_name() == dst->assigned_device_name()) {
     int src_port = edge->src_output();
     int dst_port = edge->dst_input();
@@ -141,7 +142,7 @@ bool NeedSameDeviceSendRecv(const Edge* edge, const GraphInfo& info) {
 
 // Return true iff (dst, dst_input) is specified on host memory.
 bool IsDstInputOnHost(const Edge* edge, const GraphInfo& info) {
-  Node* dst = edge->dst();
+  const Node* dst = edge->dst();
   int dst_port = edge->dst_input();
   if (info.device_types[dst->id()] != DEVICE_CPU) {
     if (edge->IsControlEdge()) return false;
@@ -372,7 +373,7 @@ string ControlLoopName(const string& name) {
 
 bool IsControlLoop(const Node* node) {
   const string& name = node->name();
-  return StringPiece(name).starts_with("_cloop");
+  return str_util::StartsWith(name, "_cloop");
 }
 
 // An enter node for control flow.
@@ -728,7 +729,10 @@ Status AddControlFlow(const PartitionOptions& opts, Graph* g,
             strings::StrCat(dst_frame_name, "$$", dst_device);
         ControlLoop loop = control_loops[cl_key];
         DCHECK(loop.enter != nullptr);
-        g->AddControlEdge(loop.merge, dst);
+        // Note that we'll create multiple duplicate edges if dst has multiple
+        // cross-device inputs. This is expected by the logic in Partition(), so
+        // it can add control edges to the recv nodes once they're created.
+        g->AddControlEdge(loop.merge, dst, /*allow_duplicates=*/true);
       }
     }
   }
@@ -781,7 +785,7 @@ Status TopologicalSortNodesWithTimePriority(
   for (int n = 0; n < gdef->node_size(); ++n) {
     const NodeDef* ndef = &gdef->node(n);
     for (int i = 0; i < ndef->input_size(); ++i) {
-      node_to_output_nodes[ParseTensorName(ndef->input(i)).first.ToString()]
+      node_to_output_nodes[std::string(ParseTensorName(ndef->input(i)).first)]
           .push_back(ndef);
     }
     int64 start_time;
@@ -896,6 +900,41 @@ Status AddControlEdges(const PartitionOptions& opts,
   return Status::OK();
 }
 
+// If 'ndef' is a Send or Recv, fills its attr send_device_incarnation
+// if possible.
+void SetIncarnation(const PartitionOptions& opts, NodeDef* ndef) {
+  StringPiece op(ndef->op());
+  if (op != "_Send" && op != "_Recv") {
+    // Not related to send/recv.
+    return;
+  }
+  string send_device;
+  if (!GetNodeAttr(*ndef, "send_device", &send_device).ok()) {
+    // No known send_device. The runtime will detect it later.
+    return;
+  }
+  int64 incarnation = PartitionOptions::kIllegalIncarnation;
+  if (!GetNodeAttr(*ndef, "send_device_incarnation", &incarnation).ok() ||
+      (incarnation == PartitionOptions::kIllegalIncarnation)) {
+    incarnation = opts.get_incarnation(send_device);
+    SetAttrValue(incarnation,
+                 &((*ndef->mutable_attr())["send_device_incarnation"]));
+  }
+}
+
+// Sets attribute send_device_incarnation of all Send/Recv nodes in
+// 'gdef', if possible.
+void SetIncarnation(const PartitionOptions& opts, GraphDef* gdef) {
+  for (NodeDef& ndef : *gdef->mutable_node()) {
+    SetIncarnation(opts, &ndef);
+  }
+  for (FunctionDef& fdef : *gdef->mutable_library()->mutable_function()) {
+    for (NodeDef& ndef : *fdef.mutable_node_def()) {
+      SetIncarnation(opts, &ndef);
+    }
+  }
+}
+
 Status Partition(const PartitionOptions& opts, Graph* g,
                  std::unordered_map<string, GraphDef>* partitions) {
   Status status;
@@ -937,8 +976,14 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     dst_def->set_device(dst->assigned_device_name());
     dst_def->clear_input();  // Inputs are filled below
     if (opts.need_to_record_start_times) {
-      int64 start_time = opts.start_times[dst->id()].value();
-      AddNodeAttr("_start_time", start_time, dst_def);
+      int64 start_time;
+      status = GetNodeAttr(*dst_def, "_start_time", &start_time);
+      if (errors::IsNotFound(status)) {
+        start_time = opts.start_times[dst->id()].value();
+        AddNodeAttr("_start_time", start_time, dst_def);
+      } else if (!status.ok()) {
+        return status;
+      }
     }
 
     // Arrange the incoming edges to dst so that input[i] holds the
@@ -995,18 +1040,18 @@ Status Partition(const PartitionOptions& opts, Graph* g,
       int64 send_start_time = 0;
       int64 recv_start_time = 0;
       if (opts.scheduling_for_recvs) {
-        if (opts.need_to_record_start_times) {
+        status = GetNodeAttr(src->attrs(), "_start_time", &send_start_time);
+        if (errors::IsNotFound(status) && opts.need_to_record_start_times) {
           send_start_time = opts.start_times[src->id()].value();
+        } else if (!status.ok()) {
+          return status;
+        }
+
+        status = GetNodeAttr(dst->attrs(), "_start_time", &recv_start_time);
+        if (errors::IsNotFound(status) && opts.need_to_record_start_times) {
           recv_start_time = opts.start_times[dst->id()].value();
-        } else {
-          status = GetNodeAttr(src->attrs(), "_start_time", &send_start_time);
-          if (!status.ok()) {
-            return status;
-          }
-          status = GetNodeAttr(dst->attrs(), "_start_time", &recv_start_time);
-          if (!status.ok()) {
-            return status;
-          }
+        } else if (!status.ok()) {
+          return status;
         }
       }
 
@@ -1072,7 +1117,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
         // before the data is available.
         AddInput(real_recv, send->name(), Graph::kControlSlot);
       } else if (control_flow_edge != nullptr) {
-        // Redirect control edge to the real recv since this is not a same
+        // Redirect control edge to the real recv since this is not the same
         // device send/recv.
         --num_control_flow_edges;
         AddInput(real_recv, control_flow_edge->src()->name(),
@@ -1108,7 +1153,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     // Add control edges from 'ref_control_inputs' to 'ref_recvs'.
     // NOTE(yuanbyu): Adding these control edges should not introduce
     // deadlocks. 'dst' has implicit "read" nodes that, when we split
-    // across devices, are made explicit; Retargettig the dependencies
+    // across devices, are made explicit; Retargeting the dependencies
     // to 'dst' to those nodes would not introduce cycles if there isn't
     // one before the transformation.
     // NOTE(yuanbyu): This may impact performance because it defers the
@@ -1124,10 +1169,20 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     }
   }
 
-  // Set versions and function library
+  const FunctionLibraryDefinition* flib_def = opts.flib_def;
+  if (flib_def == nullptr) {
+    flib_def = &g->flib_def();
+  }
+
+  // Set versions, function library and send/recv incarnation.
   for (auto& it : *partitions) {
-    it.second.mutable_versions()->CopyFrom(g->versions());
-    *it.second.mutable_library() = g->flib_def().ToProto();
+    GraphDef* gdef = &it.second;
+    *gdef->mutable_versions() = g->versions();
+    *gdef->mutable_library() = flib_def->ToProto();
+
+    // Traverse the graph to fill every send/recv op's incarnation
+    // information.
+    SetIncarnation(opts, gdef);
   }
 
   // Set the start times for recvs at the very end.
